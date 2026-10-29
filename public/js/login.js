@@ -1,0 +1,3 @@
+const form=document.querySelector('#login-form'),error=document.querySelector('#error');
+async function csrf(){return (await fetch('/api/admin/csrf')).json();}
+form.addEventListener('submit',async e=>{e.preventDefault();error.textContent='';const f=new FormData(form);try{const c=await csrf();const r=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':c.csrfToken},body:JSON.stringify({email:f.get('email'),password:f.get('password')})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Sign in failed');sessionStorage.setItem('csrf',d.csrfToken);location.href='/';}catch(x){error.textContent=x.message;}});

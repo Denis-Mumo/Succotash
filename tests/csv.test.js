@@ -1,0 +1,3 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const {parseCsv,parseRoster}=require('../src/utils/csv');
+test('CSV parser respects quoted commas and escaped quotes',()=>{assert.deepEqual(parseCsv('email,name\r\na@example.test,"Doe, Jane"\r\nb@example.test,"Say ""Hello"""'),[['email','name'],['a@example.test','Doe, Jane'],['b@example.test','Say "Hello"']]);});
+test('roster parser maps columns, normalizes email, and rejects duplicate identities',()=>{assert.deepEqual(parseRoster('name,email\n"Doe, Jane",JANE@example.test'),[{email:'jane@example.test',name:'Doe, Jane'}]);assert.throws(()=>parseRoster('email,name\na@example.test,A\na@example.test,B'),/duplicate email/);});

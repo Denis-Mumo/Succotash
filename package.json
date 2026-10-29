@@ -1,0 +1,30 @@
+{
+  "name": "qr-security-assessment",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Privacy-conscious QR security awareness assessment platform",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "migrate": "node scripts/migrate.js",
+    "seed": "node scripts/seed.js",
+    "create-admin": "node scripts/create-admin.js",
+    "set-admin-role": "node scripts/set-admin-role.js",
+    "retention": "node scripts/enforce-retention.js",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "connect-sqlite3": "^0.9.15",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "express-session": "^1.18.1",
+    "helmet": "^8.0.0",
+    "qrcode": "^1.5.4",
+    "sqlite3": "^5.1.7",
+    "zod": "^3.24.1"
+  }
+}
