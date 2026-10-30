@@ -13,6 +13,8 @@ const db = require('./database/db');
 const { requireAdmin, sameOrigin, csrf } = require('./middleware/auth');
 const { buildReport, percent } = require('./utils/analytics');
 const { parseRoster } = require('./utils/csv');
+const { companies, normalizeKenyanPhone, normalizeStaffNumber } = require('./utils/assessment');
+const createAwarenessRouter = require('./routes/awareness-assessments');
 
 if (config.nodeEnv === 'production' && config.sessionSecret.length < 32) throw new Error('SESSION_SECRET must contain at least 32 characters in production');
 const app = express();
@@ -36,6 +38,7 @@ const tokenHash = token => crypto.createHash('sha256').update(token).digest('hex
 const audit = (adminId, action, type, id, details = {}) => db.run('INSERT INTO audit_logs(administrator_id,action,entity_type,entity_id,details) VALUES(?,?,?,?,?)', [adminId, action, type, id == null ? null : String(id), JSON.stringify(details)]);
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 100, standardHeaders: 'draft-7', legacyHeaders: false });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 8, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many login attempts. Try again later.' } });
+const assessmentLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many attempts. Please wait and try again.' } });
 const string = (max = 200) => z.string().trim().max(max);
 function eventFilters(query) {
   const where=[],params=[];
@@ -81,8 +84,7 @@ app.get('/q/:token', limiter, asyncRoute(async (req,res) => {
   const sourceIp = typeof req.ip === 'string' && req.ip ? req.ip : 'unknown';
   await db.run('INSERT INTO scan_events(event_ref,campaign_id,qr_code_id,location_id,occurred_at,source_ip,classification,method,user_agent_category) VALUES(?,?,?,?,?,?,?,?,?)', [eventRef, code.campaign_id, code.id, code.location_id, scannedAtUtc, sourceIp, automated ? 'likely_automated' : 'unclassified', 'GET', automated ? 'automated_or_preview' : 'browser_or_unknown']);
   await db.run('UPDATE scan_events SET processing_status=\'processed\' WHERE event_ref=?', [eventRef]);
-  const message = config.landingMessage.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  res.set('Cache-Control','no-store').type('html').send(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QR Security Assessment</title><link rel="stylesheet" href="/css/app.css"><main class="landing"><div class="mark">QR</div><p class="eyebrow">SECURITY AWARENESS</p><h1>Pause before you proceed.</h1><p>${message}</p><form method="post" action="/q/${encodeURIComponent(token)}/continue"><input type="hidden" name="eventRef" value="${eventRef}"><button type="submit">Continue to guidance</button></form><p class="fine">This page records an assessment request. It does not identify you or collect precise location or device data.</p></main></html>`);
+  res.set('Cache-Control','no-store').redirect(303, `/assessment?token=${encodeURIComponent(token)}&eventRef=${encodeURIComponent(eventRef)}`);
 }));
 app.post('/q/:token/continue', limiter, asyncRoute(async (req,res) => {
   const token = req.params.token; const eventRef = req.body.eventRef;
@@ -94,8 +96,63 @@ app.post('/q/:token/continue', limiter, asyncRoute(async (req,res) => {
   res.set('Cache-Control','no-store').type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/css/app.css"><main class="landing"><div class="mark">✓</div><p class="eyebrow">ASSESSMENT COMPLETE</p><h1>Thanks for taking a moment.</h1><p>Unexpected QR codes can lead to unsafe destinations. Verify the source and report anything suspicious using your organization’s approved process.</p></main></html>');
 }));
 
+app.get('/assessment', (req,res) => res.set('Cache-Control','no-store').sendFile(path.join(config.root,'public','employee-assessment.html')));
+
+async function resolveAssessmentScan(token, eventRef) {
+  if (!/^[A-Za-z0-9_-]{32,100}$/.test(token || '') || !/^[0-9a-f-]{36}$/i.test(eventRef || '')) return null;
+  return db.get(`SELECT e.id scan_event_id,e.qr_code_id,e.occurred_at,e.source_ip
+    FROM scan_events e JOIN qr_codes q ON q.id=e.qr_code_id
+    JOIN campaigns c ON c.id=q.campaign_id JOIN locations l ON l.id=q.location_id
+    WHERE e.event_ref=? AND q.token_hash=? AND q.active=1 AND c.status='active' AND l.active=1`, [eventRef, tokenHash(token)]);
+}
+
+app.post('/q/:token/assessment/start', sameOrigin, assessmentLimiter, asyncRoute(async (req,res) => {
+  const scan = await resolveAssessmentScan(req.params.token, req.body.eventRef);
+  const staffNumber = normalizeStaffNumber(req.body.staffNumber);
+  if (!scan) return res.status(404).json({error:'This assessment link is invalid or no longer active.'});
+  if (!staffNumber) return res.status(400).json({error:'Enter a valid staff number to continue.'});
+  await db.run(`INSERT INTO awareness_assessments(scan_event_id,staff_number,qr_code_id,ip_address,scanned_at,status)
+    VALUES(?,?,?,?,?,'started') ON CONFLICT(scan_event_id) DO NOTHING`, [scan.scan_event_id, staffNumber, scan.qr_code_id, scan.source_ip || 'unknown', scan.occurred_at]);
+  const existing = await db.get('SELECT id,staff_number FROM awareness_assessments WHERE scan_event_id=?',[scan.scan_event_id]);
+  if (!existing || existing.staff_number !== staffNumber) return res.status(409).json({error:'This scan has already been used to start an assessment.'});
+  res.set('Cache-Control','no-store').json({ok:true});
+}));
+
+app.post('/q/:token/assessment/company', sameOrigin, assessmentLimiter, asyncRoute(async (req,res) => {
+  const scan = await resolveAssessmentScan(req.params.token, req.body.eventRef);
+  const staffNumber = normalizeStaffNumber(req.body.staffNumber);
+  const company = req.body.company;
+  if (!scan) return res.status(404).json({error:'This assessment link is invalid or no longer active.'});
+  if (!staffNumber || !companies.includes(company)) return res.status(400).json({error:'Choose a valid company to continue.'});
+  const updated = await db.run(`UPDATE awareness_assessments SET company=?,updated_at=?
+    WHERE scan_event_id=? AND staff_number=? AND status='started' AND company IS NULL`, [company,new Date().toISOString(),scan.scan_event_id,staffNumber]);
+  if (!updated.changes) {
+    const current = await db.get('SELECT company,status FROM awareness_assessments WHERE scan_event_id=? AND staff_number=?',[scan.scan_event_id,staffNumber]);
+    if (!current || current.status !== 'started' || current.company !== company) return res.status(409).json({error:'This assessment cannot be changed or has already been completed.'});
+  }
+  res.set('Cache-Control','no-store').json({ok:true});
+}));
+
+app.post('/q/:token/assessment/complete', sameOrigin, assessmentLimiter, asyncRoute(async (req,res) => {
+  const scan = await resolveAssessmentScan(req.params.token, req.body.eventRef);
+  const staffNumber = normalizeStaffNumber(req.body.staffNumber);
+  const phoneNumber = normalizeKenyanPhone(req.body.phoneNumber);
+  if (!scan) return res.status(404).json({error:'This assessment link is invalid or no longer active.'});
+  if (!staffNumber) return res.status(400).json({error:'Enter a valid staff number to continue.'});
+  if (!phoneNumber) return res.status(400).json({error:'Enter a valid Kenyan mobile number.'});
+  const completedAt = new Date().toISOString();
+  const updated = await db.run(`UPDATE awareness_assessments SET phone_number=?,completed_at=?,status='completed',updated_at=?
+    WHERE scan_event_id=? AND staff_number=? AND company IN ('SKL','CHRS','POL') AND status='started' AND completed_at IS NULL`,
+    [phoneNumber,completedAt,completedAt,scan.scan_event_id,staffNumber]);
+  if (!updated.changes) return res.status(409).json({error:'This assessment is already complete or cannot be continued.'});
+  res.set('Cache-Control','no-store').json({ok:true});
+}));
+
 const admin = express.Router();
 admin.use(requireAdmin);
+function requireItAdmin(req,res,next){if(req.admin?.role!=='privacy_admin')return res.status(403).json({error:'Privacy administrator role required for employee records'});next();}
+admin.use('/assessments', requireItAdmin);
+admin.use('/assessments', createAwarenessRouter({db,audit}));
 admin.get('/me', (req,res) => res.json({ email:req.admin.email, role:req.admin.role, timezone:config.displayTimezone }));
 admin.get('/dashboard', asyncRoute(async (req,res) => {
   const counts = await db.get(`SELECT (SELECT count(*) FROM campaigns WHERE status='active') active_campaigns,(SELECT count(*) FROM qr_codes) total_codes,(SELECT count(*) FROM scan_events) total_requests,(SELECT count(DISTINCT source_ip) FROM scan_events WHERE source_ip!='unknown') unique_source_ips,(SELECT count(*) FROM locations WHERE active=1) locations,(SELECT count(*) FROM scan_events WHERE classification IN ('possible_human','confirmed_human')) possible_human,(SELECT count(*) FROM scan_events WHERE classification='confirmed_human') confirmed_human,(SELECT count(DISTINCT qr_code_id) FROM scan_events WHERE classification IN ('possible_human','confirmed_human')) unique_codes,(SELECT count(*) FROM scan_events WHERE classification='likely_automated') automated`);
@@ -146,5 +203,5 @@ app.use('/api/admin', sameOrigin, admin);
 app.get('/login', (req,res)=>res.sendFile(path.join(config.root,'public','login.html')));
 app.get('/', (req,res)=>res.sendFile(path.join(config.root,'public','index.html')));
 app.use((req,res)=>res.status(404).json({error:'Not found'}));
-app.use((err,req,res,next)=>{console.error(err.message);if(res.headersSent)return next(err);res.status(500).json({error:'An unexpected error occurred'});});
+app.use((err,req,res,next)=>{console.error('Request failed');if(res.headersSent)return next(err);const status=Number.isInteger(err.status)&&err.status>=400&&err.status<500?err.status:500;res.status(status).json({error:status===400?'Invalid request body':'An unexpected error occurred'});});
 module.exports=app;

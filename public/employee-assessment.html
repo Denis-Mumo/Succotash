@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#112c42">
+  <title>Secret Rewards System | Silafrica</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <script src="/js/employee-assessment.js" defer></script>
+</head>
+<body class="employee-body">
+  <main class="employee-shell">
+    <section class="employee-card" aria-live="polite">
+      <header class="silafrica-lockup" aria-label="Silafrica">
+        <span class="silafrica-wordmark">SILAFRICA</span>
+        <span class="silafrica-tagline">WE MAKE PACKAGING ROAR</span>
+      </header>
+      <div class="progress" aria-label="Step 1 of 4"><span class="progress-fill" id="progress-fill"></span></div>
+      <p class="employee-step" id="step-label">STEP 1 OF 4</p>
+
+      <section class="employee-step-panel" data-step="welcome">
+        <div class="employee-emblem" aria-hidden="true">S</div>
+        <p class="employee-eyebrow">STAFF APPRECIATION</p>
+        <h1>Secret Rewards System</h1>
+        <p class="employee-intro">Welcome. Enter your staff number to continue.</p>
+        <p class="privacy-inline">Internal security-awareness exercise. Submitted details are for authorized IT training review only; no SMS or phone contact will be made.</p>
+        <form id="staff-form" novalidate>
+          <label class="employee-label" for="staff-number">Staff number</label>
+          <input class="employee-input" id="staff-number" name="staffNumber" autocomplete="off" maxlength="64" required aria-describedby="staff-error">
+          <p class="employee-error" id="staff-error" role="alert"></p>
+          <button class="employee-button" type="submit">Continue <span aria-hidden="true">→</span></button>
+        </form>
+        <details class="privacy-note">
+          <summary>Privacy notice</summary>
+          <p>This is an internal security-awareness exercise. If you continue, your staff number, company and phone number, together with this QR scan’s time and network address, will be stored for authorized IT review and awareness training. Access is restricted to authorized IT administrators and records follow the organization’s retention policy. No SMS will be sent and no one will contact you using the phone number.</p>
+        </details>
+      </section>
+
+      <section class="employee-step-panel" data-step="company" hidden>
+        <div class="employee-emblem" aria-hidden="true">02</div>
+        <p class="employee-eyebrow">YOUR WORKPLACE</p>
+        <h1>Select your company</h1>
+        <p class="employee-intro">Choose the company associated with your staff number.</p>
+        <form id="company-form" novalidate>
+          <label class="employee-label" for="company">Company</label>
+          <select class="employee-input" id="company" name="company" required>
+            <option value="">Select a company</option>
+            <option value="SKL">SKL</option>
+            <option value="CHRS">CHRS</option>
+            <option value="POL">POL</option>
+          </select>
+          <p class="employee-error" id="company-error" role="alert"></p>
+          <button class="employee-button" type="submit">Continue <span aria-hidden="true">→</span></button>
+        </form>
+      </section>
+
+      <section class="employee-step-panel" data-step="contact" hidden>
+        <div class="employee-emblem" aria-hidden="true">03</div>
+        <p class="employee-eyebrow">FINAL STEP</p>
+        <h1>Where should we send your rewards?</h1>
+        <p class="employee-intro">Enter a Kenyan mobile number to continue.</p>
+        <form id="phone-form" novalidate>
+          <label class="employee-label" for="phone-number">Phone number</label>
+          <input class="employee-input" id="phone-number" name="phoneNumber" type="tel" inputmode="tel" autocomplete="tel" placeholder="07XXXXXXXX or +254XXXXXXXXX" maxlength="24" required aria-describedby="phone-hint phone-error">
+          <p class="employee-hint" id="phone-hint">Accepted formats include 07XXXXXXXX, 01XXXXXXXX and +254XXXXXXXXX.</p>
+          <p class="employee-error" id="phone-error" role="alert"></p>
+          <button class="employee-button" type="submit">Submit <span aria-hidden="true">→</span></button>
+        </form>
+      </section>
+
+      <section class="employee-step-panel" data-step="complete" hidden>
+        <div class="warning-shield" aria-hidden="true"><svg viewBox="0 0 48 48" focusable="false"><path d="M24 4 7 11v11c0 11 7.3 18.8 17 22 9.7-3.2 17-11 17-22V11L24 4Z"/><path d="M24 15v11m0 7h.02"/></svg></div>
+        <p class="employee-eyebrow">SECURITY NOTICE</p>
+        <h1 class="blocked-message">You have been blocked by your admin. Please contact IT.</h1>
+        <div class="debrief-box">
+          <h2>This was a security-awareness exercise</h2>
+          <p>There is no rewards program connected to this page. It was designed to show how unexpected QR codes and reward offers can prompt people to share personal information.</p>
+          <p>Your submitted information is available only to authorized IT administrators for awareness training, is governed by the organization’s retention policy, and will not be used to send messages or contact you.</p>
+          <p>If you scanned an unexpected QR code at work, verify it with the responsible team and report it through your usual IT security channel.</p>
+        </div>
+      </section>
+      <footer class="employee-footer">Silafrica · Internal security awareness</footer>
+    </section>
+  </main>
+</body>
+</html>
