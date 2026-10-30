@@ -3,4 +3,5 @@ node_modules/
 data/*.sqlite
 data/*.sqlite-*
 coverage/
+.vercel/
 npm-debug.log*

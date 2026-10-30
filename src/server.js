@@ -7,4 +7,5 @@ async function start(){
   if(!migration) throw new Error('Database is not initialized. Run npm run migrate first.');
   app.listen(config.port,()=>console.log(`QR Security Assessment Platform listening on port ${config.port}`));
 }
-start().catch(e=>{console.error(e.message);process.exit(1);});
+if (require.main === module) start().catch(e=>{console.error(e.message);process.exit(1);});
+module.exports = app;

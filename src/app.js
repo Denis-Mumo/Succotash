@@ -1,6 +1,6 @@
 const express = require('express');
 const session = require('express-session');
-const SQLiteStore = require('connect-sqlite3')(session);
+const PostgresStore = require('connect-pg-simple')(session);
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
@@ -9,23 +9,28 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const { z } = require('zod');
 const config = require('./config/env');
+const SQLiteStore = config.databaseUrl ? null : module.require('connect-sqlite3')(session);
 const db = require('./database/db');
 const { requireAdmin, sameOrigin, csrf } = require('./middleware/auth');
 const { buildReport, percent } = require('./utils/analytics');
 const { parseRoster } = require('./utils/csv');
 const { companies, normalizeKenyanPhone, normalizeStaffNumber } = require('./utils/assessment');
+const { requestIp } = require('./utils/request-ip');
 const createAwarenessRouter = require('./routes/awareness-assessments');
 
 if (config.nodeEnv === 'production' && config.sessionSecret.length < 32) throw new Error('SESSION_SECRET must contain at least 32 characters in production');
 const app = express();
 app.disable('x-powered-by');
 // Trust forwarding headers only from explicitly configured proxy addresses/networks.
-if (config.trustedProxyCidrs.length) app.set('trust proxy', config.trustedProxyCidrs);
+if (config.isVercel) app.set('trust proxy', 1); // Vercel overwrites forwarding headers before invoking the function.
+else if (config.trustedProxyCidrs.length) app.set('trust proxy', config.trustedProxyCidrs);
 app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'", 'https://cdn.jsdelivr.net'], styleSrc: ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net'], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"] } } }));
 app.use(express.json({ limit: '32kb' }));
 app.use(express.urlencoded({ extended: false, limit: '8kb' }));
 app.use(session({
-  store: new SQLiteStore({ dir: path.dirname(config.databasePath), db: path.basename(config.databasePath), table: 'web_sessions', concurrentDB: true }),
+  store: config.databaseUrl
+    ? new PostgresStore({ pool: db.pool, tableName: 'web_sessions', createTableIfMissing: false })
+    : new SQLiteStore({ dir: path.dirname(config.databasePath), db: path.basename(config.databasePath), table: 'web_sessions', concurrentDB: true }),
   name: 'qr_assessment.sid', secret: config.sessionSecret, resave: false, saveUninitialized: false,
   cookie: { httpOnly: true, sameSite: 'strict', secure: config.nodeEnv === 'production', maxAge: 30 * 60 * 1000 },
 }));
@@ -35,6 +40,11 @@ app.use(express.static(path.join(config.root, 'public'), { index: 'index.html', 
 const asyncRoute = fn => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
 const uuid = () => crypto.randomUUID();
 const tokenHash = token => crypto.createHash('sha256').update(token).digest('hex');
+const publicPage = (req, res, name) => {
+  if (!config.isVercel) return res.sendFile(path.join(config.root, 'public', name));
+  const query = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
+  return res.redirect(302, `/${name}${query}`);
+};
 const audit = (adminId, action, type, id, details = {}) => db.run('INSERT INTO audit_logs(administrator_id,action,entity_type,entity_id,details) VALUES(?,?,?,?,?)', [adminId, action, type, id == null ? null : String(id), JSON.stringify(details)]);
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 100, standardHeaders: 'draft-7', legacyHeaders: false });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 8, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many login attempts. Try again later.' } });
@@ -74,14 +84,14 @@ app.post('/api/admin/logout', sameOrigin, requireAdmin, csrf, asyncRoute(async (
 // Public scanning records a request only; it never identifies a visitor.
 app.get('/q/:token', limiter, asyncRoute(async (req,res) => {
   const token = req.params.token;
-  if (!/^[A-Za-z0-9_-]{32,100}$/.test(token)) return res.status(404).sendFile(path.join(config.root,'public','not-found.html'));
+  if (!/^[A-Za-z0-9_-]{32,100}$/.test(token)) return config.isVercel ? res.status(404).type('html').send('<!doctype html><title>QR code not found</title><h1>QR code not found</h1>') : res.status(404).sendFile(path.join(config.root,'public','not-found.html'));
   const code = await db.get(`SELECT q.id,q.campaign_id,q.location_id,q.reference FROM qr_codes q JOIN campaigns c ON c.id=q.campaign_id JOIN locations l ON l.id=q.location_id WHERE q.token_hash=? AND q.active=1 AND c.status='active' AND l.active=1`, [tokenHash(token)]);
-  if (!code) return res.status(404).sendFile(path.join(config.root,'public','not-found.html'));
+  if (!code) return config.isVercel ? res.status(404).type('html').send('<!doctype html><title>QR code not found</title><h1>QR code not found</h1>') : res.status(404).sendFile(path.join(config.root,'public','not-found.html'));
   const ua = (req.get('user-agent') || '').slice(0,300);
   const automated = /bot|crawler|spider|preview|scanner|headless|curl|wget|facebookexternalhit|slackbot/i.test(ua);
   const eventRef = uuid();
   const scannedAtUtc = new Date().toISOString();
-  const sourceIp = typeof req.ip === 'string' && req.ip ? req.ip : 'unknown';
+  const sourceIp = requestIp(req, config.isVercel);
   await db.run('INSERT INTO scan_events(event_ref,campaign_id,qr_code_id,location_id,occurred_at,source_ip,classification,method,user_agent_category) VALUES(?,?,?,?,?,?,?,?,?)', [eventRef, code.campaign_id, code.id, code.location_id, scannedAtUtc, sourceIp, automated ? 'likely_automated' : 'unclassified', 'GET', automated ? 'automated_or_preview' : 'browser_or_unknown']);
   await db.run('UPDATE scan_events SET processing_status=\'processed\' WHERE event_ref=?', [eventRef]);
   res.set('Cache-Control','no-store').redirect(303, `/assessment?token=${encodeURIComponent(token)}&eventRef=${encodeURIComponent(eventRef)}`);
@@ -96,7 +106,7 @@ app.post('/q/:token/continue', limiter, asyncRoute(async (req,res) => {
   res.set('Cache-Control','no-store').type('html').send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/css/app.css"><main class="landing"><div class="mark">✓</div><p class="eyebrow">ASSESSMENT COMPLETE</p><h1>Thanks for taking a moment.</h1><p>Unexpected QR codes can lead to unsafe destinations. Verify the source and report anything suspicious using your organization’s approved process.</p></main></html>');
 }));
 
-app.get('/assessment', (req,res) => res.set('Cache-Control','no-store').sendFile(path.join(config.root,'public','employee-assessment.html')));
+app.get('/assessment', (req,res) => { res.set('Cache-Control','no-store'); return publicPage(req, res, 'employee-assessment.html'); });
 
 async function resolveAssessmentScan(token, eventRef) {
   if (!/^[A-Za-z0-9_-]{32,100}$/.test(token || '') || !/^[0-9a-f-]{36}$/i.test(eventRef || '')) return null;
@@ -196,12 +206,12 @@ admin.get('/reports', asyncRoute(async(req,res)=>res.json(await db.all('SELECT i
 admin.get('/reports/:id', asyncRoute(async(req,res)=>{const r=await db.get('SELECT * FROM assessment_reports WHERE id=?',[req.params.id]);if(!r)return res.sendStatus(404);res.json({...r,content:JSON.parse(r.content_json)});}));
 admin.get('/reports/:id/export.csv', asyncRoute(async(req,res)=>{const r=await db.get('SELECT * FROM assessment_reports WHERE id=?',[req.params.id]);if(!r)return res.sendStatus(404);const data=JSON.parse(r.content_json);const cell=v=>{let s=String(v??'');if(/^[\s]*[=+@-]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';};const rows=[['Metric','Value'],['Campaign',data.campaign],['Objective',data.objective],['Start date',data.duration.startsAt],['End date',data.duration.endsAt],['Active QR codes',data.activeQrCodes],['Approved locations',data.approvedLocations],['Total requests',data.totalRequests],['Estimated unique code interactions',data.estimatedUniqueInteractions],['Confirmed interactions',data.confirmedInteractions],['Potential automated traffic',data.potentialAutomatedTraffic],['Employee denominator available',data.denominatorAvailable],['Limitations',data.limitations],...data.followUpTopics.map((t,i)=>[`Suggested follow-up topic ${i+1}`,t]),...data.locationRates.map(x=>[x.location,x.interaction_codes,x.codes])];await audit(req.admin.id,'report.export','assessment_report',r.id,{format:'csv'});res.attachment(`assessment-report-${r.id}.csv`).type('text/csv').send(rows.map(row=>row.map(cell).join(',')).join('\r\n'));}));
 admin.get('/audit-logs', asyncRoute(async(req,res)=>res.json(await db.all('SELECT a.*,ad.email administrator_email FROM audit_logs a LEFT JOIN administrators ad ON ad.id=a.administrator_id ORDER BY a.created_at DESC LIMIT 500'))));
-admin.post('/participants/import', csrf, asyncRoute(async(req,res)=>{if(req.admin.role!=='privacy_admin')return res.status(403).json({error:'Privacy administrator role required'});const csv=String(req.body.csv||'');if(csv.length>1024*1024)return res.status(413).json({error:'CSV is too large'});let parsed;try{parsed=parseRoster(csv)}catch(e){return res.status(400).json({error:e.message})}const existing=await db.all(`SELECT email FROM participant_identity_mapping WHERE email COLLATE NOCASE IN (${parsed.map(()=>'?').join(',')})`,parsed.map(x=>x.email));if(existing.length)return res.status(409).json({error:'One or more email addresses already exist in the participant roster'});await db.transaction(async()=>{for(const p of parsed){const ref=uuid();const x=await db.run('INSERT INTO participant_records(participant_ref) VALUES(?)',[ref]);await db.run('INSERT INTO participant_identity_mapping(participant_id,email,display_name,imported_by) VALUES(?,?,?,?)',[x.lastID,p.email,p.name,req.admin.id]);}});await audit(req.admin.id,'participant_roster.import','participant_records',null,{count:parsed.length});res.status(201).json({imported:parsed.length});}));
+admin.post('/participants/import', csrf, asyncRoute(async(req,res)=>{if(req.admin.role!=='privacy_admin')return res.status(403).json({error:'Privacy administrator role required'});const csv=String(req.body.csv||'');if(csv.length>1024*1024)return res.status(413).json({error:'CSV is too large'});let parsed;try{parsed=parseRoster(csv)}catch(e){return res.status(400).json({error:e.message})}const existing=await db.all(`SELECT email FROM participant_identity_mapping WHERE lower(email) IN (${parsed.map(()=>'?').join(',')})`,parsed.map(x=>x.email.toLowerCase()));if(existing.length)return res.status(409).json({error:'One or more email addresses already exist in the participant roster'});await db.transaction(async()=>{for(const p of parsed){const ref=uuid();const x=await db.run('INSERT INTO participant_records(participant_ref) VALUES(?)',[ref]);await db.run('INSERT INTO participant_identity_mapping(participant_id,email,display_name,imported_by) VALUES(?,?,?,?)',[x.lastID,p.email,p.name,req.admin.id]);}});await audit(req.admin.id,'participant_roster.import','participant_records',null,{count:parsed.length});res.status(201).json({imported:parsed.length});}));
 admin.post('/attributions', csrf, asyncRoute(async(req,res)=>{if(req.admin.role!=='privacy_admin')return res.status(403).json({error:'Privacy administrator role required'});const s=z.object({eventId:z.number().int().positive(),participantRef:z.string().uuid(),basis:string(1000).min(1),confidence:z.enum(['low','medium','high'])}).safeParse(req.body);if(!s.success)return res.status(400).json({error:'Invalid attribution'});const person=await db.get('SELECT id FROM participant_records WHERE participant_ref=?',[s.data.participantRef]);if(!person)return res.sendStatus(404);const x=await db.run('INSERT INTO attribution_records(event_id,participant_id,basis,confidence,created_by) VALUES(?,?,?,?,?)',[s.data.eventId,person.id,s.data.basis,s.data.confidence,req.admin.id]);await audit(req.admin.id,'participant.attribution.create','attribution',x.lastID,{eventId:s.data.eventId});res.status(201).json({id:x.lastID});}));
 admin.get('/participants', asyncRoute(async(req,res)=>{if(req.admin.role!=='privacy_admin')return res.status(403).json({error:'Privacy administrator role required'});await audit(req.admin.id,'participant_records.view','participant_records',null);res.json(await db.all('SELECT p.participant_ref,m.email,m.display_name,p.created_at FROM participant_records p JOIN participant_identity_mapping m ON m.participant_id=p.id WHERE p.active=1 ORDER BY p.created_at DESC'));}));
 app.use('/api/admin', sameOrigin, admin);
-app.get('/login', (req,res)=>res.sendFile(path.join(config.root,'public','login.html')));
-app.get('/', (req,res)=>res.sendFile(path.join(config.root,'public','index.html')));
+app.get('/login', (req,res)=>publicPage(req, res, 'login.html'));
+app.get('/', (req,res)=>publicPage(req, res, 'index.html'));
 app.use((req,res)=>res.status(404).json({error:'Not found'}));
 app.use((err,req,res,next)=>{console.error('Request failed');if(res.headersSent)return next(err);const status=Number.isInteger(err.status)&&err.status>=400&&err.status<500?err.status:500;res.status(status).json({error:status===400?'Invalid request body':'An unexpected error occurred'});});
 module.exports=app;

@@ -3,8 +3,8 @@ const path = require('node:path');
 const db = require('../src/database/db');
 async function main() {
   await db.exec('PRAGMA foreign_keys = ON');
-  await db.exec("CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')))");
-  const folder = path.join(__dirname, '../src/database/migrations');
+  const folder = path.join(__dirname, db.dialect === 'postgres' ? '../src/database/postgres-migrations' : '../src/database/migrations');
+  if (db.dialect === 'postgres') await db.exec("CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')))");
   const files=fs.readdirSync(folder).filter(name=>name.endsWith('.sql')).sort();
   let applied=0;
   for(const name of files){
@@ -14,6 +14,6 @@ async function main() {
     console.log(`Applied ${name}`);applied++;
   }
   if(!applied)console.log('Database is up to date');
-  db.raw.close();
+  await db.close();
 }
-main().catch(e => { console.error(e.message); process.exitCode = 1; });
+main().catch(async e => { console.error(e.message); process.exitCode = 1; await db.close().catch(()=>{}); });
