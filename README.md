@@ -62,6 +62,7 @@ Copy `.env.example` to `.env` and set:
 - `SESSION_SECRET` to a secret generated outside source control. Rotate it as an incident response action (existing sessions will expire).
 - `DATABASE_PATH` to a persistent, access-controlled path outside the public web root.
 - `PORT` to the listen port.
+- `PUBLIC_BASE_URL` to the canonical URL employees' phones can reach, such as `http://192.168.1.25:3000` for LAN testing or an approved internal HTTPS hostname. When blank, generated QR URLs use the current dashboard request's scheme and host.
 - `TRUST_PROXY_CIDRS` to a comma-separated list of exact trusted reverse-proxy IPs/CIDRs only when behind those proxies. Leave it blank for direct access; Express then ignores `X-Forwarded-For`.
 - `DISPLAY_TIMEZONE` to an IANA timezone such as `UTC` or `Africa/Nairobi` for dashboard display. Stored timestamps remain UTC.
 - `LANDING_MESSAGE` to an approved, non-sensitive organization message. The rendered value is HTML-escaped.
@@ -94,7 +95,7 @@ Place the SQLite file and backups on encrypted, access-controlled storage. Use a
 3. Allow inbound HTTPS only from approved office/VPN networks at the proxy. Firewall the Node port so only the proxy host can connect. Do not configure public DNS, internet port forwarding, or a public tunnel.
 4. Set `TRUST_PROXY_CIDRS` to the exact internal proxy IP/CIDR only; proxy configuration must overwrite incoming forwarding headers. If Node receives direct connections, leave it blank.
 5. Run the app under a dedicated service account that can read/write the SQLite database and session store, but cannot expose or modify backups. Keep the database outside the public web directory; restrict backup folders to designated operators and encrypt backup media.
-6. Set production secrets, run migrations and create the first admin using the service environment, then grant `privacy_admin` only to authorized IT/privacy staff. Open the dashboard using the canonical internal HTTPS hostname before generating QR codes; generated scan URLs use the request host.
+6. Set production secrets, run migrations and create the first admin using the service environment, then grant `privacy_admin` only to authorized IT/privacy staff. Set `PUBLIC_BASE_URL` to the canonical internal HTTPS hostname (or the Fedora laptop's reserved LAN IP and port during HTTP-only testing); generated QR scan URLs will use this value even if the dashboard was opened through `localhost`.
 7. From a managed phone on the staff Wi-Fi/VPN, scan a test QR code, complete a test submission with approved test data, and verify the scan/assessment link in the restricted dashboard. Confirm the app is unreachable from guest Wi-Fi and the public internet.
 
 ## Event classification and limits
