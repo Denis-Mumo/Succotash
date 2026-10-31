@@ -84,6 +84,10 @@ Place the SQLite file and backups on encrypted, access-controlled storage. Use a
 6. Set production secrets, run migrations and create the first admin using the service environment, then grant `privacy_admin` only to authorized IT/privacy staff. Set `PUBLIC_BASE_URL` to the canonical internal HTTPS hostname (or the Fedora laptop's reserved LAN IP and port during HTTP-only testing); generated QR scan URLs will use this value even if the dashboard was opened through `localhost`.
 7. From a managed phone on the staff Wi-Fi/VPN, scan a test QR code, complete a test submission with approved test data, and verify the scan/assessment link in the restricted dashboard. Confirm the app is unreachable from guest Wi-Fi and the public internet.
 
+For an internal name such as `rewards.silafrica`, have the office DNS administrator create an internal DNS record resolving that name to the Fedora laptop's reserved LAN IP. For HTTPS, terminate TLS at an internal reverse proxy on the Fedora host, forward requests to the app port, and install a certificate trusted by staff phones. Set `PUBLIC_BASE_URL=https://rewards.silafrica` and set `TRUST_PROXY_CIDRS` to the exact local proxy address only if the proxy overwrites forwarded headers. Restart the app and generate new QR codes. If HTTPS is not configured, use the explicit internal HTTP address and port; phones must be on the office LAN or VPN.
+
+QR generation requires an active campaign and active location. A new campaign starts as a draft; activate it under **Campaigns** before generating QR codes. Scanning a valid active code is public and redirects to the employee assessment page without administrator login. The `/login` page is only for administrators. If a code shows “unavailable,” confirm its campaign is active, the location is active, and the code has not been revoked.
+
 ## Event classification and limits
 
 - A valid GET records an **unclassified request**, except request user-agent strings matching common bot, crawler, preview, or CLI patterns are labeled **likely automated**. This is a heuristic and can be wrong in either direction.
